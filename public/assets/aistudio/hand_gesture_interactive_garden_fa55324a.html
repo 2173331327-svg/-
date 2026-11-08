@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hand Gesture Interactive Garden</title>
+
+    <!-- Tailwind CSS for modern, minimal UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js (WebGL 3D Rendering) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <!-- MediaPipe Hands & Camera Utils via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        /* Modern reset and font setup */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #0f172a;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            user-select: none;
+        }
+
+        /* Container keeping camera aspect ratio without stretching */
+        #viewport-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+        }
+
+        /* Video element - mirrored for natural interaction */
+        #webcam {
+            position: absolute;
+            object-fit: cover;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+            z-index: 1;
+        }
+
+        /* Overlay Canvases */
+        #canvas-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        #three-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 3;
+            pointer-events: none;
+        }
+
+        /* UI Glassmorphic Panels */
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+
+        /* Custom scrollbar for guide panel */
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="text-slate-100">
+
+    <div id="viewport-container">
+        <!-- Live Video Stream -->
+        <video id="webcam" playsinline autoplay muted></video>
+
+        <!-- 2D Canvas for Hand Tracking UI / Elements -->
+        <canvas id="canvas-overlay"></canvas>
+
+        <!-- 3D Canvas for Three.js Effects -->
+        <div id="three-canvas"></div>
+
+        <!-- Top Status Bar -->
+        <div class="absolute top-4 left-4 right-4 z-10 flex justify-between items-center pointer-events-none">
+            <div class="glass-panel px-4 py-2.5 rounded-2xl flex items-center gap-3 shadow-lg pointer-events-auto">
+                <div class="relative flex h-3 w-3">
+                  <span id="status-ping" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                  <span id="status-dot" class="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+                </div>
+                <span id="status-text" class="text-xs sm:text-sm font-medium tracking-wide text-slate-200">初始化 Camera & AI 识别中...</span>
+            </div>
+
+            <button id="toggle-guide-btn" class="glass-panel px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-medium hover:bg-slate-800/80 transition-all pointer-events-auto flex items-center gap-2 shadow-lg">
+                <span>手势指南</span>
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            </button>
+        </div>
+
+        <!-- Side Control Guide Modal / Panel -->
+        <div id="guide-panel" class="absolute top-20 right-4 z-20 w-80 max-h-[calc(100vh-6rem)] glass-panel rounded-3xl p-5 shadow-2xl flex flex-col gap-4 overflow-y-auto transition-all transform opacity-100 scale-100 origin-top-right">
+            <div class="flex justify-between items-center border-b border-white/10 pb-3">
+                <h2 class="font-bold text-base tracking-wide text-white">魔法手势交互指南</h2>
+                <button id="close-guide-btn" class="text-slate-400 hover:text-white transition-colors">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+
+            <!-- Left Hand Legend -->
+            <div class="space-y-2">
+                <div class="text-xs font-semibold text-emerald-400 tracking-wider uppercase">左手：植物选择 & 播种</div>
+                <div class="grid grid-cols-2 gap-2 text-xs">
+                    <div class="bg-slate-800/60 p-2 rounded-xl flex items-center gap-2 border border-white/5">
+                        <span class="text-xl">🌻</span> <span>食指：向日葵</span>
+                    </div>
+                    <div class="bg-slate-800/60 p-2 rounded-xl flex items-center gap-2 border border-white/5">
+                        <span class="text-xl">🌸</span> <span>中指：樱花</span>
+                    </div>
+                    <div class="bg-slate-800/60 p-2 rounded-xl flex items-center gap-2 border border-white/5">
+                        <span class="text-xl">🌹</span> <span>无名指：玫瑰</span>
+                    </div>
+                    <div class="bg-slate-800/60 p-2 rounded-xl flex items-center gap-2 border border-white/5">
+                        <span class="text-xl">🌵</span> <span>小指：仙人掌</span>
+                    </div>
+                </div>
+                <p class="text-[11px] text-slate-300 bg-emerald-950/40 p-2 rounded-lg border border-emerald-500/20">
+                    💡 <strong>大拇指触碰左手各手指</strong>：掉落对应植物的种子（多次触碰可增加种子/生长能量）。
+                </p>
+            </div>
+
+            <!-- Right Hand Legend -->
+            <div class="space-y-2">
+                <div class="text-xs font-semibold text-cyan-400 tracking-wider uppercase">右手：自然元素 & 魔法控制</div>
+                <div class="grid grid-cols-2 gap-2 text-xs">
+                    <div class="bg-slate-800/60 p-2 rounded-xl flex items-center gap-2 border border-white/5">
+                        <span class="text-xl">☀️</span> <span>食指：阳光</span>
+                    </div>
+                    <div class="bg-slate-800/60 p-2 rounded-xl flex items-center gap-2 border border-white/5">
+                        <span class="text-xl">⚡</span> <span>中指：雷电</span>
+                    </div>
+                    <div class="bg-slate-800/60 p-2 rounded-xl flex items-center gap-2 border border-white/5">
+                        <span class="text-xl">💧</span> <span>无名指：水滴</span>
+                    </div>
+                    <div class="bg-slate-800/60 p-2 rounded-xl flex items-center gap-2 border border-white/5">
+                        <span class="text-xl">🌪️</span> <span>小指：龙卷风</span>
+                    </div>
+                </div>
+                <div class="text-[11px] text-slate-300 space-y-1.5 bg-cyan-950/40 p-2.5 rounded-lg border border-cyan-500/20">
+                    <p>💧 <strong>大指触碰无名指</strong>：掉落水滴，浇灌种子使其发芽开花！</p>
+                    <p>☀️ <strong>大指触碰食指</strong>：未开花时直接开花；开花后掉落果实🍎！</p>
+                    <p>⚡ <strong>大指触碰中指</strong>：召唤雷电！未开花打碎种子，开花后击黑烧毁！</p>
+                    <p>🌪️ <strong>大指触碰小指</strong>：狂风刮起！未开花种子随风向右飘动；开花后花朵被吹走！</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center Notification Toast -->
+        <div id="toast" class="absolute bottom-10 z-20 transition-all transform translate-y-10 opacity-0 pointer-events-none">
+            <div class="glass-panel px-6 py-3 rounded-full text-sm font-semibold text-white shadow-2xl flex items-center gap-2 border border-amber-500/30">
+                <span id="toast-icon">✨</span>
+                <span id="toast-text">准备就绪，请在镜头前展示双手</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Application Logic -->
+    <script>
+        // --- Web Audio Synthesizer Engine ---
+        class SoundEngine {
+            constructor() {
+                this.ctx = null;
+            }
+
+            init() {
+                if (!this.ctx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    this.ctx = new AudioContext();
+                }
+                if (this.ctx.state === 'suspended') {
+                    this.ctx.resume();
+                }
+            }
+
+            // Play seed drop sound
+            playSeedDrop() {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(600, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(200, this.ctx.currentTime + 0.15);
+                gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.15);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.15);
+            }
+
+            // Play water drop sound
+            playWaterDrop() {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(400, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(800, this.ctx.currentTime + 0.12);
+                gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.12);
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.12);
+            }
+
+            // Play flower bloom chord
+            playBloom() {
+                if (!this.ctx) return;
+                const freqs = [523.25, 659.25, 783.99, 1046.50]; // C Major Chord
+                freqs.forEach((f, index) => {
+                    const osc = this.ctx.createOscillator();
+                    const gain = this.ctx.createGain();
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(f, this.ctx.currentTime + index * 0.05);
+                    gain.gain.setValueAtTime(0.0, this.ctx.currentTime);
+                    gain.gain.linearRampToValueAtTime(0.25, this.ctx.currentTime + index * 0.05 + 0.1);
+                    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 1.2);
+                    osc.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    osc.start(this.ctx.currentTime + index * 0.05);
+                    osc.stop(this.ctx.currentTime + 1.2);
+                });
+            }
+
+            // Play lightning sound
+            playLightning() {
+                if (!this.ctx) return;
+                // Noise buffer
+                const bufferSize = this.ctx.sampleRate * 0.3;
+                const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+                const noise = this.ctx.createBufferSource();
+                noise.buffer = buffer;
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                filter.frequency.setValueAtTime(800, this.ctx.currentTime);
+                filter.frequency.linearRampToValueAtTime(100, this.ctx.currentTime + 0.3);
+
+                const gain = this.ctx.createGain();
+                gain.gain.setValueAtTime(0.8, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.3);
+
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.ctx.destination);
+                noise.start();
+            }
+
+            // Play wind gust sound
+            playWind() {
+                if (!this.ctx) return;
+                const bufferSize = this.ctx.sampleRate * 0.6;
+                const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+                const noise = this.ctx.createBufferSource();
+                noise.buffer = buffer;
+
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'bandpass';
+                filter.frequency.setValueAtTime(300, this.ctx.currentTime);
+                filter.frequency.linearRampToValueAtTime(700, this.ctx.currentTime + 0.3);
+                filter.frequency.linearRampToValueAtTime(200, this.ctx.currentTime + 0.6);
+
+                const gain = this.ctx.createGain();
+                gain.gain.setValueAtTime(0.01, this.ctx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.4, this.ctx.currentTime + 0.3);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.6);
+
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.ctx.destination);
+                noise.start();
+            }
+
+            // Play fruit drop pop sound
+            playFruitDrop() {
+                if (!this.ctx) return;
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(300, this.ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(900, this.ctx.currentTime + 0.08);
+                osc.frequency.exponentialRampToValueAtTime(150, this.ctx.currentTime + 0.2);
+
+                gain.gain.setValueAtTime(0.5, this.ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+                osc.start();
+                osc.stop(this.ctx.currentTime + 0.2);
+            }
+        }
+
+        const audio = new SoundEngine();
+        document.addEventListener('click', () => audio.init(), { once: true });
+        document.addEventListener('touchstart', () => audio.init(), { once: true });
+
+        // --- Global Variables & Constants ---
+        const videoElement = document.getElementById('webcam');
+        const overlayCanvas = document.getElementById('canvas-overlay');
+        const overlayCtx = overlayCanvas.getContext('2d');
+        const threeContainer = document.getElementById('three-canvas');
+
+        // Emoji Configuration
+        const LEFT_FINGER_EMOJIS = {
+            index: '🌻',    // 向日葵
+            middle: '🌸',   // 樱花
+            ring: '🌹',     // 玫瑰
+            pinky: '🌵'     // 仙人掌
+        };
+
+        const RIGHT_FINGER_EMOJIS = {
+            index: '☀️',    // 太阳
+            middle: '⚡',   // 雷电
+            ring: '💧',     // 水滴
+            pinky: '🌪️'     // 龙卷风
+        };
+
+        const PLANT_FRUITS = {
+            '🌻': '🌻',
+            '🌸': '🌸',
+            '🌹': '🌹',
+            '🌵': '🌵'
+        };
+
+        // Touch Pinch Cooldown Tracker to prevent multi-trigger
+        const touchState = {
+            left: { index: false, middle: false, ring: false, pinky: false },
+            right: { index: false, middle: false, ring: false, pinky: false }
+        };
+
+        // Simulation Entities Arrays
+        let activeSeeds = [];     // Seeds falling from left hand
+        let activeWater = [];     // Water drops falling from right hand
+        let activeFlowers = [];   // Growing/Grown flowers at bottom
+        let activeFruits = [];    // Fruits falling from flowers
+        let activeWindParticles = []; // Wind particle effects
+        let activeLightning = null;  // Current active lightning effect
+
+        // --- Three.js Background & Lightning Engine ---
+        let scene, camera, renderer;
+        let lightningLines = [];
+
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            camera = new THREE.OrthographicCamera(
+                -window.innerWidth / 2, window.innerWidth / 2,
+                window.innerHeight / 2, -window.innerHeight / 2,
+                1, 1000
+            );
+            camera.position.z = 10;
+
+            renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            threeContainer.appendChild(renderer.domElement);
+        }
+
+        function createLightningStrike(startX, startY, endX, endY) {
+            // Remove previous lightning if any
+            clearLightning();
+
+            const points = [];
+            const steps = 12;
+            let currentX = startX;
+            let currentY = startY;
+            points.push(new THREE.Vector3(currentX, currentY, 0));
+
+            const dx = (endX - startX) / steps;
+            const dy = (endY - startY) / steps;
+
+            for (let i = 1; i < steps; i++) {
+                currentX += dx + (Math.random() - 0.5) * 40;
+                currentY += dy + (Math.random() - 0.5) * 20;
+                points.push(new THREE.Vector3(currentX, currentY, 0));
+            }
+            points.push(new THREE.Vector3(endX, endY, 0));
+
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const material = new THREE.LineBasicMaterial({
+                color: 0x60a5fa,
+                linewidth: 4,
+                transparent: true,
+                opacity: 1.0
+            });
+
+            const line = new THREE.Line(geometry, material);
+            scene.add(line);
+            lightningLines.push({ line, material, createdAt: Date.now() });
+
+            // Trigger flash sound
+            audio.playLightning();
+        }
+
+        function clearLightning() {
+            lightningLines.forEach(item => scene.remove(item.line));
+            lightningLines = [];
+        }
+
+        function updateThreeJS() {
+            const now = Date.now();
+            for (let i = lightningLines.length - 1; i >= 0; i--) {
+                const item = lightningLines[i];
+                const age = now - item.createdAt;
+                if (age > 250) {
+                    scene.remove(item.line);
+                    lightningLines.splice(i, 1);
+                } else {
+                    item.material.opacity = 1 - age / 250;
+                }
+            }
+            renderer.render(scene, camera);
+        }
+
+        // Window resize handlers
+        function onWindowResize() {
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+
+            overlayCanvas.width = w;
+            overlayCanvas.height = h;
+
+            camera.left = -w / 2;
+            camera.right = w / 2;
+            camera.top = h / 2;
+            camera.bottom = -h / 2;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize(w, h);
+        }
+        window.addEventListener('resize', onWindowResize);
+
+        // --- Main Simulation Engine ---
+        class Seed {
+            constructor(x, y, emoji) {
+                this.x = x;
+                this.y = y;
+                this.emoji = emoji;
+                this.vy = 2 + Math.random() * 2;
+                this.vx = 0;
+                this.size = 20;
+                this.dead = false;
+            }
+
+            update() {
+                this.y += this.vy;
+                this.x += this.vx;
+                // If seed reaches bottom screen, remove it (does not stay on screen)
+                if (this.y > overlayCanvas.height) {
+                    this.dead = true;
+                }
+            }
+
+            draw(ctx) {
+                ctx.font = `${this.size}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                // Draw as small seed bubble with plant emoji indicator
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 14, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.fill();
+                ctx.strokeStyle = '#10b981';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                ctx.fillText(this.emoji, this.x, this.y);
+            }
+        }
+
+        class WaterDrop {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.vy = 6 + Math.random() * 3;
+                this.dead = false;
+            }
+
+            update() {
+                this.y += this.vy;
+                if (this.y > overlayCanvas.height) {
+                    this.dead = true;
+                }
+            }
+
+            draw(ctx) {
+                ctx.font = '22px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('💧', this.x, this.y);
+            }
+        }
+
+        class Flower {
+            constructor(x, emoji) {
+                this.x = x;
+                this.targetY = overlayCanvas.height - 60; // Base position near bottom
+                this.startY = overlayCanvas.height + 80;
+                this.currentY = this.startY;
+                this.emoji = emoji;
+                this.growth = 0; // 0 to 1 scale upwards
+                this.state = 'growing'; // 'growing', 'bloomed', 'charred', 'blowing_away'
+                this.maxSize = 64;
+                this.alpha = 1.0;
+                this.vx = 0;
+                this.vy = 0;
+                this.rotation = 0;
+            }
+
+            update() {
+                if (this.state === 'growing') {
+                    // Grow bottom to top until fully displayed
+                    this.growth += 0.02;
+                    this.currentY = this.startY - (this.startY - this.targetY) * Math.min(1, this.growth);
+                    if (this.growth >= 1) {
+                        this.state = 'bloomed';
+                        audio.playBloom();
+                    }
+                } else if (this.state === 'blowing_away') {
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    this.currentY += this.vy;
+                    this.rotation += 0.08;
+                    this.alpha -= 0.015;
+                    if (this.alpha <= 0) this.dead = true;
+                } else if (this.state === 'charred') {
+                    this.alpha -= 0.02;
+                    if (this.alpha <= 0) this.dead = true;
+                }
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.translate(this.x, this.currentY);
+                ctx.rotate(this.rotation);
+
+                if (this.state !== 'blowing_away') {
+                    // Draw Stem & Leaf
+                    ctx.beginPath();
+                    ctx.moveTo(0, 0);
+                    ctx.lineTo(0, overlayCanvas.height - this.currentY);
+                    ctx.strokeStyle = this.state === 'charred' ? '#1f2937' : '#22c55e';
+                    ctx.lineWidth = 6;
+                    ctx.stroke();
+
+                    // Leaves
+                    if (this.growth > 0.4 && this.state !== 'charred') {
+                        ctx.fillStyle = '#16a34a';
+                        ctx.beginPath();
+                        ctx.ellipse(-12, 20, 12, 6, -Math.PI / 4, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.ellipse(12, 30, 12, 6, Math.PI / 4, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+
+                // Flower Emoji Head
+                const currentSize = Math.max(10, this.maxSize * Math.min(1, this.growth));
+                ctx.font = `${currentSize}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+
+                if (this.state === 'charred') {
+                    // Charred effect (blackened)
+                    ctx.fillStyle = '#000000';
+                    ctx.fillText('🖤', 0, -10);
+                } else {
+                    ctx.fillText(this.emoji, 0, -10);
+                }
+
+                ctx.restore();
+            }
+        }
+
+        class Fruit {
+            constructor(x, y, emoji) {
+                this.x = x;
+                this.y = y;
+                this.emoji = emoji;
+                this.vy = 4 + Math.random() * 2;
+                this.dead = false;
+            }
+
+            update() {
+                this.y += this.vy;
+                if (this.y > overlayCanvas.height) {
+                    this.dead = true;
+                }
+            }
+
+            draw(ctx) {
+                ctx.font = '32px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(this.emoji, this.x, this.y);
+            }
+        }
+
+        class WindParticle {
+            constructor() {
+                this.x = -20;
+                this.y = Math.random() * overlayCanvas.height;
+                this.vx = 8 + Math.random() * 8;
+                this.vy = (Math.random() - 0.5) * 2;
+                this.size = 10 + Math.random() * 20;
+                this.alpha = 0.7;
+                this.dead = false;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.alpha -= 0.01;
+                if (this.x > overlayCanvas.width || this.alpha <= 0) {
+                    this.dead = true;
+                }
+            }
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.alpha);
+                ctx.font = `${this.size}px sans-serif`;
+                ctx.fillText('💨', this.x, this.y);
+                ctx.restore();
+            }
+        }
+
+        // Toast Popup Helper
+        let toastTimeout;
+        function showToast(text, icon = '✨') {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-text').innerText = text;
+            document.getElementById('toast-icon').innerText = icon;
+
+            toast.classList.remove('opacity-0', 'translate-y-10');
+            toast.classList.add('opacity-100', 'translate-y-0');
+
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toast.classList.remove('opacity-100', 'translate-y-0');
+                toast.classList.add('opacity-0', 'translate-y-10');
+            }, 2500);
+        }
+
+        // --- MediaPipe Hands Processing ---
+        function getDistance(p1, p2) {
+            const dx = (p1.x - p2.x) * overlayCanvas.width;
+            const dy = (p1.y - p2.y) * overlayCanvas.height;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        function onHandResults(results) {
+            // Clear 2D overlay
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+            const statusText = document.getElementById('status-text');
+            const statusDot = document.getElementById('status-dot');
+            const statusPing = document.getElementById('status-ping');
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                statusText.innerText = `已检测到 ${results.multiHandLandmarks.length} 只手`;
+                statusDot.className = "relative inline-flex rounded-full h-3 w-3 bg-emerald-500";
+                statusPing.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75";
+
+                for (let index = 0; index < results.multiHandLandmarks.length; index++) {
+                    const landmarks = results.multiHandLandmarks[index];
+                    const handedness = results.multiHandedness[index].label; // 'Left' or 'Right' (Mirrored)
+                    
+                    // Note: Video is mirrored with CSS scaleX(-1). We invert X coordinates for 2D draw & interactions
+                    const normalizedLandmarks = landmarks.map(lm => ({
+                        x: 1 - lm.x,
+                        y: lm.y,
+                        z: lm.z
+                    }));
+
+                    drawHandIcons(normalizedLandmarks, handedness);
+                    processGestures(normalizedLandmarks, handedness);
+                }
+            } else {
+                statusText.innerText = "等待放置双手在镜头前...";
+                statusDot.className = "relative inline-flex rounded-full h-3 w-3 bg-amber-500";
+                statusPing.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75";
+            }
+
+            // Update & render physics entities
+            updateSimulation();
+        }
+
+        function drawHandIcons(landmarks, handedness) {
+            // MediaPipe Landmark Index Mapping:
+            // Thumb tip: 4, Index tip: 8, Middle tip: 12, Ring tip: 16, Pinky tip: 20
+            const fingerIndices = { index: 8, middle: 12, ring: 16, pinky: 20 };
+            const isLeft = handedness === 'Left'; // Camera-wise handedness
+            const emojiMap = isLeft ? LEFT_FINGER_EMOJIS : RIGHT_FINGER_EMOJIS;
+
+            overlayCtx.font = '28px sans-serif';
+            overlayCtx.textAlign = 'center';
+            overlayCtx.textBaseline = 'middle';
+
+            // Draw Emojis on Fingertips
+            for (const [finger, idx] of Object.entries(fingerIndices)) {
+                const pt = landmarks[idx];
+                const px = pt.x * overlayCanvas.width;
+                const py = pt.y * overlayCanvas.height;
+
+                // Subtle glow background behind finger emoji
+                overlayCtx.beginPath();
+                overlayCtx.arc(px, py, 18, 0, Math.PI * 2);
+                overlayCtx.fillStyle = isLeft ? 'rgba(16, 185, 129, 0.25)' : 'rgba(6, 182, 212, 0.25)';
+                overlayCtx.fill();
+
+                overlayCtx.fillText(emojiMap[finger], px, py);
+            }
+
+            // Draw Thumb Indicator
+            const thumbPt = landmarks[4];
+            const tpx = thumbPt.x * overlayCanvas.width;
+            const tpy = thumbPt.y * overlayCanvas.height;
+            overlayCtx.beginPath();
+            overlayCtx.arc(tpx, tpy, 10, 0, Math.PI * 2);
+            overlayCtx.fillStyle = '#f59e0b';
+            overlayCtx.fill();
+        }
+
+        function processGestures(landmarks, handedness) {
+            const thumb = landmarks[4];
+            const fingerIndices = { index: 8, middle: 12, ring: 16, pinky: 20 };
+            const PINCH_THRESHOLD = 42; // pixel distance threshold for pinch
+            const isLeft = handedness === 'Left';
+            const currentState = isLeft ? touchState.left : touchState.right;
+
+            for (const [finger, idx] of Object.entries(fingerIndices)) {
+                const tip = landmarks[idx];
+                const dist = getDistance(thumb, tip);
+                const tipX = tip.x * overlayCanvas.width;
+                const tipY = tip.y * overlayCanvas.height;
+
+                if (dist < PINCH_THRESHOLD) {
+                    if (!currentState[finger]) {
+                        // Action Triggered on Initial Touch
+                        currentState[finger] = true;
+                        handleGestureTrigger(isLeft, finger, tipX, tipY);
+                    }
+                } else {
+                    currentState[finger] = false;
+                }
+            }
+        }
+
+        function handleGestureTrigger(isLeft, finger, x, y) {
+            if (isLeft) {
+                // LEFT HAND: Drop Seeds according to finger touched
+                const plantEmoji = LEFT_FINGER_EMOJIS[finger];
+                activeSeeds.push(new Seed(x, y, plantEmoji));
+                audio.playSeedDrop();
+                showToast(`左手大拇指触碰${getFingerName(finger)}：掉落【${plantEmoji}】种子`, plantEmoji);
+            } else {
+                // RIGHT HAND: Natural Elements / Magic Commands
+                if (finger === 'ring') {
+                    // Right Thumb + Ring: Drop Water & Fertilize / Bloom Seeds
+                    activeWater.push(new WaterDrop(x, y));
+                    audio.playWaterDrop();
+                    showToast('右手大拇指触碰无名指：掉落水滴 💧');
+
+                    // Check if water lands near seeds or triggers germination
+                    fertilizeSeeds();
+                } 
+                else if (finger === 'index') {
+                    // Right Thumb + Index: Sun Ray -> Bloom immediately OR Drop Fruits
+                    let bloomedAny = false;
+
+                    // If flowers are already bloomed -> Drop Fruit
+                    activeFlowers.forEach(flower => {
+                        if (flower.state === 'bloomed') {
+                            const fruitEmoji = PLANT_FRUITS[flower.emoji] || '🍎';
+                            activeFruits.push(new Fruit(flower.x, flower.currentY - 40, fruitEmoji));
+                            audio.playFruitDrop();
+                            bloomedAny = true;
+                        }
+                    });
+
+                    if (bloomedAny) {
+                        showToast('太阳魔法 ☀️：已结出丰硕果实！', '🍎');
+                    } else if (activeSeeds.length > 0) {
+                        // Transform unbloomed seeds to flowers
+                        germinateAllSeeds();
+                        showToast('太阳阳光 ☀️：种子瞬间发芽开花！', '🌻');
+                    } else {
+                        showToast('太阳光芒 ☀️', '☀️');
+                    }
+                } 
+                else if (finger === 'middle') {
+                    // Right Thumb + Middle: Lightning Strike
+                    const screenCenterX = overlayCanvas.width / 2;
+                    const threeStartX = x - overlayCanvas.width / 2;
+                    const threeStartY = overlayCanvas.height / 2 - y;
+                    createLightningStrike(threeStartX, threeStartY, threeStartX, -overlayCanvas.height / 2 + 50);
+
+                    // If flowers exist -> Charred black & disappear
+                    let struckFlower = false;
+                    activeFlowers.forEach(flower => {
+                        if (flower.state !== 'charred') {
+                            flower.state = 'charred';
+                            struckFlower = true;
+                        }
+                    });
+
+                    // If unbloomed seeds exist -> Destroy seeds
+                    if (activeSeeds.length > 0) {
+                        activeSeeds = [];
+                        struckFlower = true;
+                    }
+
+                    if (struckFlower) {
+                        showToast('雷电劈下 ⚡：击中植物/种子！', '⚡');
+                    } else {
+                        showToast('雷电轰鸣 ⚡', '⚡');
+                    }
+                } 
+                else if (finger === 'pinky') {
+                    // Right Thumb + Pinky: Tornado Wind Gust
+                    audio.playWind();
+                    for (let i = 0; i < 8; i++) {
+                        activeWindParticles.push(new WindParticle());
+                    }
+
+                    // If flowers exist -> Blow away
+                    activeFlowers.forEach(flower => {
+                        if (flower.state === 'bloomed' || flower.state === 'growing') {
+                            flower.state = 'blowing_away';
+                            flower.vx = 8 + Math.random() * 6;
+                            flower.vy = -3 - Math.random() * 4;
+                        }
+                    });
+
+                    // If seeds exist -> Drift right
+                    activeSeeds.forEach(seed => {
+                        seed.vx = 7 + Math.random() * 5;
+                        seed.vy = -1;
+                    });
+
+                    showToast('龙卷风刮起 🌪️：花朵与种子随风飘散！', '🌪️');
+                }
+            }
+        }
+
+        function getFingerName(finger) {
+            const names = { index: '食指', middle: '中指', ring: '无名指', pinky: '小拇指' };
+            return names[finger] || finger;
+        }
+
+        // Germinate seeds when water/sun touches them
+        function fertilizeSeeds() {
+            if (activeSeeds.length > 0) {
+                // Take the earliest dropped seed and turn into growing flower
+                const seed = activeSeeds.shift();
+                activeFlowers.push(new Flower(seed.x, seed.emoji));
+            }
+        }
+
+        function germinateAllSeeds() {
+            activeSeeds.forEach(seed => {
+                activeFlowers.push(new Flower(seed.x, seed.emoji));
+            });
+            activeSeeds = [];
+        }
+
+        // --- Master Physics & Rendering Loop ---
+        function updateSimulation() {
+            // 1. Seeds Logic
+            for (let i = activeSeeds.length - 1; i >= 0; i--) {
+                const seed = activeSeeds[i];
+                seed.update();
+                seed.draw(overlayCtx);
+                if (seed.dead) activeSeeds.splice(i, 1);
+            }
+
+            // 2. Water Logic
+            for (let i = activeWater.length - 1; i >= 0; i--) {
+                const water = activeWater[i];
+                water.update();
+                water.draw(overlayCtx);
+                if (water.dead) activeWater.splice(i, 1);
+            }
+
+            // 3. Flowers Logic
+            for (let i = activeFlowers.length - 1; i >= 0; i--) {
+                const flower = activeFlowers[i];
+                flower.update();
+                flower.draw(overlayCtx);
+                if (flower.dead) activeFlowers.splice(i, 1);
+            }
+
+            // 4. Fruits Logic
+            for (let i = activeFruits.length - 1; i >= 0; i--) {
+                const fruit = activeFruits[i];
+                fruit.update();
+                fruit.draw(overlayCtx);
+                if (fruit.dead) activeFruits.splice(i, 1);
+            }
+
+            // 5. Wind Particles
+            for (let i = activeWindParticles.length - 1; i >= 0; i--) {
+                const p = activeWindParticles[i];
+                p.update();
+                p.draw(overlayCtx);
+                if (p.dead) activeWindParticles.splice(i, 1);
+            }
+
+            // Update Three.js overlay layer
+            updateThreeJS();
+        }
+
+        // --- Camera & MediaPipe Hands Setup ---
+        async function initCameraAndMediaPipe() {
+            initThreeJS();
+            onWindowResize();
+
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.65,
+                minTrackingConfidence: 0.65
+            });
+
+            hands.onResults(onHandResults);
+
+            const cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({ image: videoElement });
+                },
+                width: 1280,
+                height: 720
+            });
+
+            try {
+                await cameraUtils.start();
+                showToast('摄像头及手势识别系统就绪！');
+            } catch (err) {
+                console.error("Camera access failed:", err);
+                document.getElementById('status-text').innerText = "无法获取摄像头权限，请允许摄像头访问权限后重试。";
+                document.getElementById('status-dot').className = "relative inline-flex rounded-full h-3 w-3 bg-red-500";
+            }
+        }
+
+        // --- UI Interactions ---
+        const guidePanel = document.getElementById('guide-panel');
+        document.getElementById('toggle-guide-btn').addEventListener('click', () => {
+            guidePanel.classList.toggle('hidden');
+        });
+        document.getElementById('close-guide-btn').addEventListener('click', () => {
+            guidePanel.classList.add('hidden');
+        });
+
+        // Initialize Application on Window Load
+        window.onload = () => {
+            initCameraAndMediaPipe();
+        };
+    </script>
+</body>
+</html>

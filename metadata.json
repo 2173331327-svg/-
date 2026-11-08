@@ -1,0 +1,8 @@
+{
+  "name": "晴愈 - 严肃向心理疗愈游戏",
+  "description": "基于严肃心理学与心象理论的3D低多边形悬浮岛屿心理疗愈游戏，融合情绪天气映射、4大互动疗愈玩法、情绪日记与温情互助社区。",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
